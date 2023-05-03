@@ -106,12 +106,45 @@ class DecisionTreeRegressor(BaseEstimator):
         return (thresholds[:-1] + thresholds[:-1]) / 2
 
     def _getImpurity(criterion):
-        if criterion == "squared_error": return squared_error
+        if criterion == "squared_error":    return squared_error
+        if criterion == "gini":             return gini
         raise Exception('Unknown criterion! Criterion must be \'squared_error\'')
 
 
     def _theBestValue(self, y):
         return y.mean()
+
+
+# classes must be integer numbers from 0....N - 1
+class DecisionTreeClassifier(DecisionTreeRegressor):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.nClasses = None
+
+    def fit(self, X, y):
+        self.nClasses = np.unique(y).size
+        super().fit(X, y)
+        return self
+
+    def predict_proba(self, X):
+        return super().predict(X)
+
+    def predict(self, X):
+        return np.argmax(self.predict_proba(X), axis=1)
+    
+    def _theBestValue(self, y):
+        res = np.zeros(self.nClasses)
+        targets, counts = np.unique(y, return_counts=True)
+        p = np.array([count / self.nClasses for count in counts])
+        res[targets] = p
+        return res
+
+
+def gini(y):
+    targets, counts = np.unique(y, return_counts=True)
+    N = counts.sum()
+    p = np.array([count / N for count in counts])
+    return 1 - (p ** 2).sum()
 
 
 def squared_error(y):

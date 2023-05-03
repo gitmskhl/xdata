@@ -26,11 +26,11 @@ class DecisionTreeRegressor(BaseEstimator):
         self.criterion = criterion
         self.impurity = DecisionTreeRegressor._getImpurity(criterion)
         self.tree = None
-
+        self._max_depth = None
 
     def _predict_by_object(self, x):
         if self.tree is None:
-            raise 'The tree hasn\'t fitted yet' 
+            raise Exception('The tree hasn\'t fitted yet')
 
         node = self.tree
         while not node.isLeaf:
@@ -48,31 +48,26 @@ class DecisionTreeRegressor(BaseEstimator):
 
 
     def fit(self, X, y):
+        if isinstance(X, pd.DataFrame):
+            X = X.to_numpy()
+        if isinstance(y, pd.Series):
+            y = y.values
+        
         Hm = self.impurity(y)
         self.tree = self.make_node(X, y, 0, Hm)
         return self
 
 
     def make_node(self, X, y, depth, Hm):
-        if self.min_samples_split >= X.shape[0] or ((self.max_depth is not None) and (depth >= self.max_depth)):
-            val = y.mean()
-            return self._Node(feature=None, threshold=None, val=val, isLeaf=True)
+        if self._max_depth is None or depth > self._max_depth:
+            self._max_depth = depth
         
-        thresholds = self._getThresholds(y)
-        theBestImpurityDecrease, theBestThreshold, theBestFeatureSplit = None, None, None
-        for feature in range(X.shape[1]):
-            for threshold in thresholds:
-                Rl, yl, Rr, yr = self._divide(X, y, feature, threshold)
-                if Rl.shape[0] < self.min_samples_leaf or Rr.shape[0] < self.min_samples_leaf: continue
-                Hl, Hr = self.impurity(yl), self.impurity(yr)
-                impurityDecrease = Hm - Rl.shape[0] / X.shape[0] * Hl - Rr.shape[0] / X.shape[0] * Hr
-                if theBestImpurityDecrease is None or impurityDecrease > theBestImpurityDecrease:
-                    theBestImpurityDecrease = impurityDecrease
-                    theBestThreshold = threshold
-                    theBestFeatureSplit = feature
-
-        if theBestImpurityDecrease < self.min_impurity_decrease:
-            val = y.mean()
+        if self.min_samples_split >= X.shape[0] or ((self.max_depth is not None) and (depth >= self.max_depth)):
+            val = self._theBestValue(y)
+            return self._Node(feature=None, threshold=None, val=val, isLeaf=True)
+        theBestImpurityDecrease, theBestThreshold, theBestFeatureSplit = self._theBestSplit(X, y, Hm)
+        if (theBestImpurityDecrease is None) or (theBestImpurityDecrease < self.min_impurity_decrease):
+            val = self._theBestValue(y)
             return self._Node(feature=None, threshold=None, val=val, isLeaf=True)
         
         Rl, yl, Rr, yr = self._divide(X, y, theBestFeatureSplit, theBestThreshold)
@@ -81,6 +76,23 @@ class DecisionTreeRegressor(BaseEstimator):
         node.left = self.make_node(Rl, yl, depth + 1, Hl)
         node.right = self.make_node(Rr, yr, depth + 1, Hr)
         return node
+
+
+    def _theBestSplit(self, X, y, Hm):
+        theBestImpurityDecrease, theBestThreshold, theBestFeatureSplit = None, None, None
+        for feature in range(X.shape[1]):
+            thresholds = self._getThresholds(X[:, feature])
+            for threshold in thresholds:
+                Rl, yl, Rr, yr = self._divide(X, y, feature, threshold)
+                if Rl is None or Rr is None: continue
+                if Rl.shape[0] < self.min_samples_leaf or Rr.shape[0] < self.min_samples_leaf: continue
+                Hl, Hr = self.impurity(yl), self.impurity(yr)
+                impurityDecrease = Hm - Rl.shape[0] / X.shape[0] * Hl - Rr.shape[0] / X.shape[0] * Hr
+                if theBestImpurityDecrease is None or impurityDecrease > theBestImpurityDecrease:
+                    theBestImpurityDecrease = impurityDecrease
+                    theBestThreshold = threshold
+                    theBestFeatureSplit = feature
+        return theBestImpurityDecrease, theBestThreshold, theBestFeatureSplit
 
 
     def _divide(self, X, y, feature, threshold):
@@ -94,8 +106,12 @@ class DecisionTreeRegressor(BaseEstimator):
         return (thresholds[:-1] + thresholds[:-1]) / 2
 
     def _getImpurity(criterion):
-        return squared_error
+        if criterion == "squared_error": return squared_error
+        raise Exception('Unknown criterion! Criterion must be \'squared_error\'')
 
+
+    def _theBestValue(self, y):
+        return y.mean()
 
 
 def squared_error(y):

@@ -17,7 +17,7 @@ class DecisionTreeRegressor(BaseEstimator):
         def goToLeft(self, x):
             return x[self.feature] < self.threshold
 
-    def __init__(self, max_depth=None, min_samples_leaf=1, min_samples_split=2, 
+    def __init__(self, max_depth=None, min_samples_leaf=1, min_samples_split=1,
                  min_impurity_decrease=0, criterion='squared_error'):
         self.max_depth = max_depth
         self.min_samples_leaf = min_samples_leaf
@@ -59,14 +59,15 @@ class DecisionTreeRegressor(BaseEstimator):
 
 
     def make_node(self, X, y, depth, Hm):
-        if self._max_depth is None or depth > self._max_depth:
+        if (self._max_depth is None) or (depth > self._max_depth) or (Hm <= self.min_impurity_decrease):
             self._max_depth = depth
         
         if self.min_samples_split >= X.shape[0] or ((self.max_depth is not None) and (depth >= self.max_depth)):
             val = self._theBestValue(y)
             return self._Node(feature=None, threshold=None, val=val, isLeaf=True)
+
         theBestImpurityDecrease, theBestThreshold, theBestFeatureSplit = self._theBestSplit(X, y, Hm)
-        if (theBestImpurityDecrease is None) or (theBestImpurityDecrease < self.min_impurity_decrease):
+        if (theBestImpurityDecrease is None) or (theBestImpurityDecrease <= self.min_impurity_decrease):
             val = self._theBestValue(y)
             return self._Node(feature=None, threshold=None, val=val, isLeaf=True)
         
@@ -84,7 +85,6 @@ class DecisionTreeRegressor(BaseEstimator):
             thresholds = self._getThresholds(X[:, feature])
             for threshold in thresholds:
                 Rl, yl, Rr, yr = self._divide(X, y, feature, threshold)
-                if Rl is None or Rr is None: continue
                 if Rl.shape[0] < self.min_samples_leaf or Rr.shape[0] < self.min_samples_leaf: continue
                 Hl, Hr = self.impurity(yl), self.impurity(yr)
                 impurityDecrease = Hm - Rl.shape[0] / X.shape[0] * Hl - Rr.shape[0] / X.shape[0] * Hr
@@ -103,7 +103,7 @@ class DecisionTreeRegressor(BaseEstimator):
     def _getThresholds(self, y):
         thresholds = np.unique(y)
         thresholds.sort()
-        return (thresholds[:-1] + thresholds[:-1]) / 2
+        return (thresholds[:-1] + thresholds[1:]) / 2
 
     def _getImpurity(criterion):
         if criterion == "squared_error":    return squared_error
@@ -113,6 +113,7 @@ class DecisionTreeRegressor(BaseEstimator):
 
     def _theBestValue(self, y):
         return y.mean()
+
 
 
 # classes must be integer numbers from 0....N - 1

@@ -16,6 +16,33 @@ class DecisionTreeRegressor(BaseEstimator):
 
         def goToLeft(self, x):
             return x[self.feature] < self.threshold
+        
+        def print_tree(self, tab=0):
+            if self.left is not None:
+                print('\t' * tab, f'Node x[{self.feature}] < {self.threshold}')
+                print('\t' * tab, ' Left: ')
+                self.left.print_tree(tab + 1)
+                print('\t' * tab, ' Right: ')
+                self.right.print_tree(tab + 1)
+            else:
+                print('\t' * tab, f'Leaft val = {self.val}')
+        
+    class _CatNode(_Node):
+        # threshold is a list of categorical values
+        def __init__(self, feature, threshold, val=None, isLeaf=False):
+            super().__init__(feature, threshold, val, isLeaf)
+        
+        def goToLeft(self, x):
+            return x[self.feature] in self.threshold
+        
+        def print_tree(self, tab=0):
+            print('\t' * tab, f'Node x[{self.feature}] in {self.threshold}')
+            print('\t' * tab, ' Left: ')
+            self.left.print_tree(tab + 1)
+            print('\t' * tab, ' Right: ')
+            self.right.print_tree(tab + 1)
+        
+
 
     def __init__(self, max_depth=None, min_samples_leaf=1, min_samples_split=1,
                  min_impurity_decrease=0, criterion='squared_error'):
@@ -27,6 +54,8 @@ class DecisionTreeRegressor(BaseEstimator):
         self.impurity = DecisionTreeRegressor._getImpurity(criterion)
         self.tree = None
         self._max_depth = None
+        self.cat_features = self.num_features = None
+
 
     def _predict_by_object(self, x):
         if self.tree is None:
@@ -47,7 +76,10 @@ class DecisionTreeRegressor(BaseEstimator):
         return np.array([self._predict_by_object(x) for x in X])
 
 
-    def fit(self, X, y):
+    def fit(self, X, y, cat_features=None):
+        X = X.copy()
+        y = y.copy()
+        self.save_features(X, cat_features)
         if isinstance(X, pd.DataFrame):
             X = X.to_numpy()
         if isinstance(y, pd.Series):
@@ -56,6 +88,25 @@ class DecisionTreeRegressor(BaseEstimator):
         Hm = self.impurity(y)
         self.tree = self.make_node(X, y, 0, Hm)
         return self
+
+    def save_features(self, X, cat_features):
+        if cat_features is None: cat_features = np.array([])
+        else:
+            try:
+                cat_features = np.array(cat_features, dtype=int)
+            except:
+                raise Exception('cat_features param must be a list of indices or None')
+            if cat_features.ndim != 1:
+                raise Exception('cat_features param must be a 1D array of indices')
+            if np.unique(cat_features).size != cat_features.size:
+                raise Exception('cat_features param must contain unique indices')
+            if cat_features.size != 0 and (cat_features.min() < 0 or cat_features.max() >= X.shape[1]):
+                raise Exception(f"cat_features param must contain indices in range from 0 to {X.shape[1] - 1}")
+        
+        self.cat_features = cat_features
+        num_mask = ~np.isin(np.arange(X.shape[1], dtype=int), cat_features)
+        self.num_features = np.arange(X.shape[1], dtype=int)[num_mask]
+        self.cat_feature_values = [{} for _ in cat_features]
 
 
     def make_node(self, X, y, depth, Hm):
@@ -66,13 +117,18 @@ class DecisionTreeRegressor(BaseEstimator):
             val = self._theBestValue(y)
             return self._Node(feature=None, threshold=None, val=val, isLeaf=True)
 
-        theBestImpurityDecrease, theBestThreshold, theBestFeatureSplit = self._theBestSplit(X, y, Hm)
+        theBestImpurityDecrease, theBestThreshold, theBestFeatureSplit, isCatFeature = self._theBestSplit(X, y, Hm)
         if (theBestImpurityDecrease is None) or (theBestImpurityDecrease <= self.min_impurity_decrease):
             val = self._theBestValue(y)
             return self._Node(feature=None, threshold=None, val=val, isLeaf=True)
         
-        Rl, yl, Rr, yr = self._divide(X, y, theBestFeatureSplit, theBestThreshold)
-        node = self._Node(theBestFeatureSplit, theBestThreshold, None, False)
+        if isCatFeature:
+            Rl, yl, Rr, yr = self._divideCatFeature(X, y, theBestFeatureSplit, theBestThreshold)
+            node = self._CatNode(theBestFeatureSplit, theBestThreshold, None, False)
+        else:
+            Rl, yl, Rr, yr = self._divideNumFeature(X, y, theBestFeatureSplit, theBestThreshold)
+            node = self._Node(theBestFeatureSplit, theBestThreshold, None, False)
+        
         Hl, Hr = self.impurity(yl), self.impurity(yr)
         node.left = self.make_node(Rl, yl, depth + 1, Hl)
         node.right = self.make_node(Rr, yr, depth + 1, Hr)
@@ -82,20 +138,73 @@ class DecisionTreeRegressor(BaseEstimator):
     def _theBestSplit(self, X, y, Hm):
         theBestImpurityDecrease, theBestThreshold, theBestFeatureSplit = None, None, None
         for feature in range(X.shape[1]):
-            thresholds = self._getThresholds(X[:, feature])
-            for threshold in thresholds:
-                Rl, yl, Rr, yr = self._divide(X, y, feature, threshold)
-                if Rl.shape[0] < self.min_samples_leaf or Rr.shape[0] < self.min_samples_leaf: continue
-                Hl, Hr = self.impurity(yl), self.impurity(yr)
-                impurityDecrease = Hm - Rl.shape[0] / X.shape[0] * Hl - Rr.shape[0] / X.shape[0] * Hr
-                if theBestImpurityDecrease is None or impurityDecrease > theBestImpurityDecrease:
-                    theBestImpurityDecrease = impurityDecrease
-                    theBestThreshold = threshold
-                    theBestFeatureSplit = feature
-        return theBestImpurityDecrease, theBestThreshold, theBestFeatureSplit
+
+            if feature in self.cat_features:
+                impurityDecrease, threshold = self.__theBestSplitByCatFeature(X, y, feature, Hm)
+            else:
+                impurityDecrease, threshold = self.__theBestSplitByNumFeature(X, y, feature, Hm)
+            
+            if impurityDecrease is None: continue
+            if theBestImpurityDecrease is None or impurityDecrease > theBestImpurityDecrease:
+                theBestImpurityDecrease = impurityDecrease
+                theBestThreshold = threshold
+                theBestFeatureSplit = feature
+        
+        isCatFeature = theBestFeatureSplit in self.cat_features
+        return theBestImpurityDecrease, theBestThreshold, theBestFeatureSplit, isCatFeature
 
 
-    def _divide(self, X, y, feature, threshold):
+    def __theBestSplitByCatFeature(self, X, y, feature, Hm):
+        def divide(X, y, preprocessed_cat_values, threshold):
+            mask = preprocessed_cat_values < threshold
+            return X[mask], y[mask], X[~mask], y[~mask]
+
+        cat_unique, cat_preprocessed, preprocessed_cat_values = self._catPreproc(X[:, feature], y)
+        theBestImpurityDecrease, theBestThreshold = None, None
+        thresholds = self._getThresholds(cat_preprocessed)
+        for threshold in thresholds:
+            Rl, yl, Rr, yr = divide(X, y, preprocessed_cat_values, threshold)
+            if Rl.shape[0] < self.min_samples_leaf or Rr.shape[0] < self.min_samples_leaf: 
+                continue
+            Hl, Hr = self.impurity(yl), self.impurity(yr)
+            impurityDecrease = Hm - Rl.shape[0] / X.shape[0] * Hl - Rr.shape[0] / X.shape[0] * Hr
+            if theBestImpurityDecrease is None or impurityDecrease > theBestImpurityDecrease:
+                theBestImpurityDecrease = impurityDecrease
+                theBestThreshold = cat_unique[cat_preprocessed < threshold]
+        return theBestImpurityDecrease, theBestThreshold
+
+
+    def _catPreproc(self, cat_array, y):
+        cat_unique = np.unique(cat_array)
+        cat_preprocessed = np.array([y[cat_array == cat_val].mean() for cat_val in cat_unique])
+        inds = np.argsort(cat_preprocessed)
+        preprocessed_array = np.zeros_like(cat_array, dtype=np.float64)
+        for i, cat_val in enumerate(cat_unique):
+            preprocessed_array[cat_array == cat_val] = cat_preprocessed[i]
+        return cat_unique[inds], cat_preprocessed[inds], preprocessed_array
+
+
+    def __theBestSplitByNumFeature(self, X, y, feature, Hm):
+        theBestImpurityDecrease, theBestThreshold = None, None
+        thresholds = self._getThresholds(X[:, feature])
+        for threshold in thresholds:
+            Rl, yl, Rr, yr = self._divideNumFeature(X, y, feature, threshold)
+            if Rl.shape[0] < self.min_samples_leaf or Rr.shape[0] < self.min_samples_leaf: continue
+            Hl, Hr = self.impurity(yl), self.impurity(yr)
+            impurityDecrease = Hm - Rl.shape[0] / X.shape[0] * Hl - Rr.shape[0] / X.shape[0] * Hr
+            if theBestImpurityDecrease is None or impurityDecrease > theBestImpurityDecrease:
+                theBestImpurityDecrease = impurityDecrease
+                theBestThreshold = threshold
+        return theBestImpurityDecrease, theBestThreshold
+
+
+    def _divideCatFeature(self, X, y, feature, threshold):
+        cat_array = X[:, feature]
+        mask = np.isin(cat_array, threshold)
+        return X[mask], y[mask], X[~mask], y[~mask]
+
+
+    def _divideNumFeature(self, X, y, feature, threshold):
         mask = X[:, feature] < threshold
         return X[mask], y[mask], X[~mask], y[~mask]
 
@@ -115,6 +224,9 @@ class DecisionTreeRegressor(BaseEstimator):
         return y.mean()
 
 
+    def show(self):
+        self.tree.print_tree()
+
 
 # classes must be integer numbers from 0....N - 1
 class DecisionTreeClassifier(DecisionTreeRegressor):
@@ -122,9 +234,11 @@ class DecisionTreeClassifier(DecisionTreeRegressor):
         super().__init__(**kwargs)
         self.nClasses = None
 
-    def fit(self, X, y):
+    def fit(self, X, y, cat_features=None):
         self.nClasses = np.unique(y).size
-        super().fit(X, y)
+        if (cat_features is not None) and self.nClasses > 2:
+            raise Exception("Can use param 'cat_features' only for binary classification")
+        super().fit(X, y, cat_features)
         return self
 
     def predict_proba(self, X):
@@ -136,9 +250,19 @@ class DecisionTreeClassifier(DecisionTreeRegressor):
     def _theBestValue(self, y):
         res = np.zeros(self.nClasses)
         targets, counts = np.unique(y, return_counts=True)
-        p = np.array([count / self.nClasses for count in counts])
+        N = counts.sum()
+        p = np.array([count / N for count in counts])
         res[targets] = p
         return res
+    
+    def _catPreproc(self, cat_array, y):
+        cat_unique = np.unique(cat_array)
+        cat_preprocessed = np.array([(y[cat_array == cat_val] == 1).mean() for cat_val in cat_unique])
+        inds = np.argsort(cat_preprocessed)
+        preprocessed_array = np.zeros_like(cat_array, dtype=np.float64)
+        for i, cat_val in enumerate(cat_unique):
+            preprocessed_array[cat_array == cat_val] = cat_preprocessed[i]
+        return cat_unique[inds], cat_preprocessed[inds], preprocessed_array
 
 
 def gini(y):

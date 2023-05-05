@@ -198,7 +198,7 @@ class DecisionTreeRegressor(BaseEstimator):
 
         isDefaultLeft = None
         if missing:
-            theBestImpurityDecrease, isDefaultLeft = self.__adjustedImpurityDecrease(X, y, feature, X_last, Hm, X_missing, y_missing, theBestThreshold)
+            theBestImpurityDecrease, isDefaultLeft = self.__adjustedImpurityDecrease(X, y, feature, True, X_last, Hm, X_missing, y_missing, theBestThreshold)
 
         return theBestImpurityDecrease, theBestThreshold, isDefaultLeft
 
@@ -234,13 +234,17 @@ class DecisionTreeRegressor(BaseEstimator):
 
         isDefaultLeft = None
         if missing:
-            theBestImpurityDecrease, isDefaultLeft = self.__adjustedImpurityDecrease(X, y, feature, X_last, Hm, X_missing, y_missing, theBestThreshold)
+            theBestImpurityDecrease, isDefaultLeft = self.__adjustedImpurityDecrease(X, y, feature, False, X_last, Hm, X_missing, y_missing, theBestThreshold)
 
         return theBestImpurityDecrease, theBestThreshold, isDefaultLeft
 
 
-    def __adjustedImpurityDecrease(self, X, y, feature, X_last, Hm, X_missing, y_missing, theBestThreshold):
-        Rl, yl, Rr, yr = self._divideNumFeature(X, y, feature, theBestThreshold, None)
+    def __adjustedImpurityDecrease(self, X, y, feature, isCatFeature, X_last, Hm, X_missing, y_missing, theBestThreshold):
+        if isCatFeature:
+            Rl, yl, Rr, yr = self._divideCatFeature(X, y, feature, theBestThreshold, None)
+        else: 
+            Rl, yl, Rr, yr = self._divideNumFeature(X, y, feature, theBestThreshold, None)
+        
         Hl, Hr = self.impurity(np.concatenate([yl, y_missing])), self.impurity(yr)
         impurityDecreaseL = Hm - (Rl.shape[0] + X_missing.shape[0]) / X_last.shape[0] * Hl - Rr.shape[0] / X_last.shape[0] * Hr
 

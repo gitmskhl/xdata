@@ -76,8 +76,8 @@ class DecisionTreeRegressor(BaseEstimator):
         while not node.isLeaf:
             goLeft = node.goToLeft(x)
             if goLeft is None:
-                left = self._evaluate(x, node.left)
-                right = self._evaluate(x, node.right)
+                left = self._predict_by_object(x, node.left)
+                right = self._predict_by_object(x, node.right)
                 return node.left.num_objects / node.num_objects * left + node.right.num_objects / node.num_objects * right
             elif goLeft:
                 node = node.left
@@ -193,6 +193,9 @@ class DecisionTreeRegressor(BaseEstimator):
                 theBestImpurityDecrease = impurityDecrease
                 theBestThreshold = cat_unique[cat_preprocessed < threshold]
 
+        if theBestImpurityDecrease is None: # we can't split the node
+            return None, None, None
+
         isDefaultLeft = None
         if missing:
             theBestImpurityDecrease, isDefaultLeft = self.__adjustedImpurityDecrease(X, y, feature, X_last, Hm, X_missing, y_missing, theBestThreshold)
@@ -225,6 +228,10 @@ class DecisionTreeRegressor(BaseEstimator):
                 theBestImpurityDecrease = impurityDecrease
                 theBestThreshold = threshold
 
+
+        if theBestImpurityDecrease is None: # we can't split the node
+            return None, None, None
+
         isDefaultLeft = None
         if missing:
             theBestImpurityDecrease, isDefaultLeft = self.__adjustedImpurityDecrease(X, y, feature, X_last, Hm, X_missing, y_missing, theBestThreshold)
@@ -240,7 +247,7 @@ class DecisionTreeRegressor(BaseEstimator):
         Hl, Hr = self.impurity(yl), self.impurity(np.concatenate([yr, y_missing]))
         impurityDecreaseR = Hm - Rl.shape[0] / X_last.shape[0] * Hl - (Rr.shape[0] + X_missing.shape[0]) / X_last.shape[0] * Hr
         
-        theBestImpurityDecrease = np.max(impurityDecreaseL, impurityDecreaseR)
+        theBestImpurityDecrease = max(impurityDecreaseL, impurityDecreaseR)
         isDefaultLeft = theBestImpurityDecrease == impurityDecreaseL
         return theBestImpurityDecrease, isDefaultLeft
 

@@ -60,18 +60,6 @@ class DecisionTreeRegressor(BaseEstimator):
         self.cat_features = self.num_features = None
 
 
-    # def _predict_by_object(self, x):
-    #     node = self.tree
-    #     while not node.isLeaf:
-    #         goLeft = node.goToLeft(x)
-    #         if goLeft is None:
-    #             pass
-    #         elif goLeft:
-    #             node = node.left
-    #         else:
-    #             node = node.right
-    #     return node.val
-
     def _predict_by_object(self, x, node):
         while not node.isLeaf:
             goLeft = node.goToLeft(x)

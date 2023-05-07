@@ -223,6 +223,10 @@ class MyXGBoostTree(BaseEstimator):
         return theBestSplit
 
 
+    def _theBestSplitByFeatureOptimized(self, feature, Xm, ym, predictions_m, Sm, Hm) -> _Split:
+        pass
+
+
     def _make_leaf(self, S, H) -> _Node:
         return self._Node(feature=None, threshold=None, isLeaf=True, val=self._theBestValue(S, H))
 

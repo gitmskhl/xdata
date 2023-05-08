@@ -139,14 +139,16 @@ class MyXGBoostTree(BaseEstimator):
             self.predictionsL, self.predictionsR    = predictionsL, predictionsR
 
 
-    def __init__(self, lossDeriv, loss2Deriv, gamma_, lambda_, max_depth):
-        self.lossDeriv  = lossDeriv
-        self.loss2Deriv =   loss2Deriv
-        self.gamma_     = gamma_
-        self.lambda_    = lambda_
-        self.root       = None
-        self.max_depth  = max_depth
-
+    def __init__(self, lossDeriv, loss2Deriv, gamma_, lambda_, max_depth, splitFinding, quantileCount):
+        self.lossDeriv              = lossDeriv
+        self.loss2Deriv             = loss2Deriv
+        self.gamma_                 = gamma_
+        self.lambda_                = lambda_
+        self.root                   = None
+        self.max_depth              = max_depth
+        self.splitFinding           = splitFinding
+        self._theBestSplitByFeature = self._theBestSplitByFeatureFull if splitFinding == 'full' else self._theBestSplitByFeatureOptimized
+        self.quantileCount          = quantileCount
 
     def _predict_by_object(self, x, node):
         while not node.isLeaf:
@@ -172,6 +174,13 @@ class MyXGBoostTree(BaseEstimator):
         if isinstance(y, pd.Series):
             y = y.values
 
+        if self.splitFinding == 'auto':
+            if X.shape[0] > 10 * self.quantileCount:
+                self._theBestSplitByFeature = self._theBestSplitByFeatureOptimized
+            else:
+                self._theBestSplitByFeature = self._theBestSplitByFeatureFull
+            
+        
         S, H = self.__getSH(y, current_predictions)
         self.root = self.make_node(X, y, current_predictions, S, H, 0)
 
@@ -200,7 +209,7 @@ class MyXGBoostTree(BaseEstimator):
 
 
 
-    def _theBestSplitByFeature(self, feature, Xm, ym, predictions_m, Sm, Hm) -> _Split:
+    def _theBestSplitByFeatureFull(self, feature, Xm, ym, predictions_m, Sm, Hm) -> _Split:
         impurity = self._impurity(Sm, Hm)
         inds = np.argsort(Xm[:, feature])
         Xm, ym, predictions_m = Xm[inds], ym[inds], predictions_m[inds]
@@ -224,8 +233,46 @@ class MyXGBoostTree(BaseEstimator):
 
 
     def _theBestSplitByFeatureOptimized(self, feature, Xm, ym, predictions_m, Sm, Hm) -> _Split:
-        pass
+        impurity = self._impurity(Sm, Hm)
+        buckets, thresholds = self.__getBucketsByQuantiles(feature, Xm)
 
+        theBestSplit = None
+        Sl = Hl = 0
+        leftMask = np.zeros(Xm.shape[0], dtype=bool)
+        for i, mask in enumerate(buckets[:-1]):
+            if (not np.any(mask)) or (np.all(mask)) : continue
+            threshold = thresholds[i]
+            Sl = Sl + self.__getS(ym[mask], predictions_m[mask])
+            Hl = Hl + self.__getH(ym[mask], predictions_m[mask])
+            Sr, Hr = Sm - Sl, Hm - Hl
+
+            leftMask = (leftMask | mask)
+            impurityDecrease = impurity - self._impurity(Sl, Hl) - self._impurity(Sr, Hr)
+            if (theBestSplit is None) or (theBestSplit.impurityDecrease < impurityDecrease):
+                Xl, yl = Xm[leftMask], ym[leftMask]
+                Xr, yr = Xm[~leftMask], ym[~leftMask]
+                predictionsL, predictionsR = predictions_m[leftMask], predictions_m[~leftMask]
+                theBestSplit = self._Split(feature, threshold, impurityDecrease, Xl, yl, Xr, yr, Sl, Hl, Sr, Hr, predictionsL, predictionsR)
+        
+        return theBestSplit
+
+    
+    def __getBucketsByQuantiles(self, feature, X):
+        thresholds = self.__getThresholdsByQuantiles(feature, X)
+        buckets = np.zeros(shape=(self.quantileCount, X.shape[0]), dtype=bool)
+        for i in range(len(thresholds) - 1):
+            start, end = thresholds[i], thresholds[i + 1]
+            if i == 0:
+                mask = ((X[:, feature] >= start) & (X[:, feature] <= end))
+            else:
+                mask = ((X[:, feature] > start) & (X[:, feature] <= end))
+            buckets[i] = mask
+        return buckets, thresholds[1:]
+
+
+    def __getThresholdsByQuantiles(self, feature, X):
+        quantiles = [k * 1.0/ self.quantileCount for k in range(self.quantileCount + 1)]
+        return np.quantile(X[:, feature], quantiles)
 
     def _make_leaf(self, S, H) -> _Node:
         return self._Node(feature=None, threshold=None, isLeaf=True, val=self._theBestValue(S, H))
@@ -256,18 +303,21 @@ class MyXGBoostTree(BaseEstimator):
 class MyXGBoost(BaseEstimator):
     
     
-    def __init__(self, lossDeriv, loss2Deriv, n_estimators=100, gamma_=1, lambda_=1, learning_rate=.1, max_depth=None, save_history=False, metric=None):
-        self.lossDeriv = lossDeriv
-        self.loss2Deriv = loss2Deriv
-        self.n_estimators = n_estimators
-        self.learning_rate = learning_rate
-        self.base_models = None
-        self.gamma_ = gamma_
-        self.lambda_ = lambda_
-        self.save_history = save_history
-        self.history = None if not save_history else []
-        self.metric = metric
-        self.max_depth = max_depth
+    def __init__(self, lossDeriv, loss2Deriv, n_estimators=100, gamma_=1, lambda_=1, learning_rate=.1, max_depth=None, splitFinding='full', quantileCount=100, save_history=False, metric=None):
+        self.lossDeriv      = lossDeriv
+        self.loss2Deriv     = loss2Deriv
+        self.n_estimators   = n_estimators
+        self.learning_rate  = learning_rate
+        self.base_models    = None
+        self.gamma_         = gamma_
+        self.lambda_        = lambda_
+        self.save_history   = save_history
+        self.history        = None if not save_history else []
+        self.metric         = metric
+        self.max_depth      = max_depth
+        self.splitFinding   = splitFinding
+        self.quantileCount  = quantileCount
+
 
     def predict(self, X):
         if self.base_models is None:
@@ -290,7 +340,7 @@ class MyXGBoost(BaseEstimator):
         self.base_models = [ConstRegressor(0)]
         current_predicts = np.full(y.size, 0) * self.learning_rate
         for _ in range(self.n_estimators):
-            model = MyXGBoostTree(lossDeriv=self.lossDeriv, loss2Deriv=self.loss2Deriv, gamma_=self.gamma_, lambda_=self.lambda_, max_depth=self.max_depth)
+            model = MyXGBoostTree(lossDeriv=self.lossDeriv, loss2Deriv=self.loss2Deriv, gamma_=self.gamma_, lambda_=self.lambda_, max_depth=self.max_depth, splitFinding=self.splitFinding, quantileCount=self.quantileCount)
             model.fit(X, y, current_predicts)
             current_predicts = current_predicts + self.learning_rate * model.predict(X)
             self.base_models.append(model)

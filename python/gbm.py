@@ -194,6 +194,7 @@ class MyXGBoostTree(BaseEstimator):
         theBestSplit = None
         for feature in range(Xm.shape[1]):
             theBestSplitByFeature = self._theBestSplitByFeature(feature, Xm, ym, predictions_m, Sm, Hm)
+            if theBestSplitByFeature is None: continue
             if (theBestSplit is None) or (theBestSplitByFeature.impurityDecrease > theBestSplit.impurityDecrease):
                 theBestSplit = theBestSplitByFeature
         

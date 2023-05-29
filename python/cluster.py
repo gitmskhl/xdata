@@ -32,3 +32,46 @@ class KMeans(BaseEstimator):
     
     def _updateCenters(self, X):
         return np.concatenate([X[self.labels_ == k].mean(axis=0)[None, :] for k in range(self.n_clusters)], axis=0)
+    
+
+
+class DBSCAN(BaseEstimator):
+    
+    def __init__(self, eps=.5, min_samples=5):
+        self.eps            = eps
+        self.min_samples    = min_samples
+        self.labels_        = None
+        self.n_clusters_     = None
+
+    
+    def fit(self, X):
+        # -2 - undefined, -1 - noise
+        self.labels_ = np.zeros(X.shape[0], dtype=int) - 2
+        self.n_clusters_ = 0
+        for p in range(X.shape[0]):
+            if self.labels_[p] != -2: continue
+            self._makeCluster(X, p)
+        return self
+
+    def _makeCluster(self, X, pind):
+        if not self._isCorePoint(X, pind):
+            self.labels_[pind] = -1
+            return
+
+        self.n_clusters_ += 1
+        cluster = [pind]
+        self.labels_[pind] = self.n_clusters_ - 1
+        while len(cluster) > 0:
+            current = cluster.pop()
+            if self._isCorePoint(X, current):
+                neighbours = self._getNeighbours(X, current)
+                cluster = list(neighbours[self.labels_[neighbours] < 0]) + cluster
+                self.labels_[neighbours] = self.n_clusters_ - 1
+            
+            
+    def _isCorePoint(self, X, pind):
+        return len(self._getNeighbours(X, pind)) > self.min_samples
+
+
+    def _getNeighbours(self, X, pind):
+        return np.where(pairwise_distances(X[pind][None, :], X)[0] < self.eps)[0]
